@@ -8,6 +8,7 @@ using System.Data;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Management;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -35,7 +36,14 @@ namespace Conversor
                 config = new Property(rutaArchivoConfig);
                 ffmpegPath = config.get("ffmpegPath");
                 textBox2.Text = ffmpegPath;
+                
+                // Cargar preferencia de GPU
+                String useGPU = config.get("useGPU", "false");
+                checkBoxGPU.Checked = useGPU.ToLower() == "true";
             }
+            
+            // Agregar event handler para guardar cambios del checkbox
+            checkBoxGPU.CheckedChanged += checkBoxGPU_CheckedChanged;
             
 
                   
@@ -80,6 +88,39 @@ namespace Conversor
                 textProgressBar4.Maximum = listBox1.Items.Count;
             }
 
+        }
+
+        private String DetectarGPU()
+        {
+            try
+            {
+                using (var searcher = new ManagementObjectSearcher("select * from Win32_VideoController"))
+                {
+                    foreach (ManagementObject obj in searcher.Get())
+                    {
+                        String nombre = obj["Name"]?.ToString() ?? "";
+                        nombre = nombre.ToUpper();
+
+                        if (nombre.Contains("NVIDIA"))
+                        {
+                            return "NVIDIA";
+                        }
+                        else if (nombre.Contains("AMD") || nombre.Contains("RADEON"))
+                        {
+                            return "AMD";
+                        }
+                        else if (nombre.Contains("INTEL"))
+                        {
+                            return "INTEL";
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error detectando GPU: " + ex.Message);
+            }
+            return null;
         }
 
         private async void button3_Click(object sender, EventArgs e)
@@ -127,33 +168,92 @@ namespace Conversor
 
                 foreach (String ruta in listBox1.Items)
                 {
-                    try
+                    textProgressBar3.Value = 0;
+                    String outputPath = textBox1.Text + "\\" + Path.GetFileNameWithoutExtension(ruta) + "_convertido.mp4";
+                    bool conversionExitosa = false;
+
+                    // Intentar con GPU si está habilitado
+                    if (checkBoxGPU.Checked)
                     {
-                        textProgressBar3.Value = 0;
-                        await Task.Run(() =>
+                        String tipoGPU = DetectarGPU();
+                        if (tipoGPU != null)
                         {
-
-                            //ffmpeg -i VID_20200202_163129.mp4 -c:v libx264 -b:v 8M -minrate 8M -preset medium -vf scale=1280:720 -c:a aac -b:a 192K VID_20200202_163129_converted.mp4
-                            var container = new ArgumentContainer
+                            try
                             {
-                            new InputArgument(new VideoInfo(ruta)),
-                            new VideoCodecArgument(FFMpegCore.FFMPEG.Enums.VideoCodec.LibX264,8000),
-                            new SpeedArgument(FFMpegCore.FFMPEG.Enums.Speed.Medium),
-                            new ScaleArgument(ancho,alto),
-                            new AudioCodecArgument(FFMpegCore.FFMPEG.Enums.AudioCodec.Aac, FFMpegCore.FFMPEG.Enums.AudioQuality.Normal),
-                            new ThreadsArgument(0),
-                            new OutputArgument(new FileInfo(textBox1.Text + "\\" + Path.GetFileNameWithoutExtension(ruta) + "_convertido.mp4"))
+                                await Task.Run(() =>
+                                {
+                                    var container = new ArgumentContainer
+                                    {
+                                        new InputArgument(new VideoInfo(ruta)),
+                                        new ScaleArgument(ancho, alto)
+                                    };
 
-                            };
+                                    // Agregar codec de GPU según el tipo detectado
+                                    if (tipoGPU == "NVIDIA")
+                                    {
+                                        container.Add(new CustomArgument("-c:v h264_nvenc -preset slow -rc vbr_hq -b:v 8000k"));
+                                    }
+                                    else if (tipoGPU == "AMD")
+                                    {
+                                        container.Add(new CustomArgument("-c:v h264_amf -quality quality -b:v 8000k"));
+                                    }
+                                    else if (tipoGPU == "INTEL")
+                                    {
+                                        container.Add(new CustomArgument("-c:v h264_qsv -preset slow -b:v 8000k"));
+                                    }
 
-                            encoder.Convert(container);
-                        });
-                        textProgressBar4.Value++;
+                                    container.Add(new AudioCodecArgument(FFMpegCore.FFMPEG.Enums.AudioCodec.Aac, FFMpegCore.FFMPEG.Enums.AudioQuality.Normal));
+                                    container.Add(new ThreadsArgument(0));
+                                    container.Add(new OutputArgument(new FileInfo(outputPath)));
+
+                                    encoder.Convert(container);
+                                });
+                                conversionExitosa = true;
+                            }
+                            catch (Exception exGPU)
+                            {
+                                Console.WriteLine("Error en conversión con GPU: " + exGPU.Message);
+                                MessageBox.Show("La conversión con GPU falló. Se intentará con CPU.",
+                                               "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            }
+                        }
+                        else
+                        {
+                            MessageBox.Show("No se detectó una GPU compatible (NVIDIA, AMD o Intel). Se usará CPU.",
+                                           "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        }
                     }
-                    catch (Exception ex) { }
+
+                    // Fallback a CPU si GPU falló o no está habilitado
+                    if (!conversionExitosa)
+                    {
+                        try
+                        {
+                            textProgressBar3.Value = 0;
+                            await Task.Run(() =>
+                            {
+                                //ffmpeg -i VID_20200202_163129.mp4 -c:v libx264 -b:v 8M -minrate 8M -preset medium -vf scale=1280:720 -c:a aac -b:a 192K VID_20200202_163129_converted.mp4
+                                var container = new ArgumentContainer
+                                {
+                                    new InputArgument(new VideoInfo(ruta)),
+                                    new VideoCodecArgument(FFMpegCore.FFMPEG.Enums.VideoCodec.LibX264,8000),
+                                    new SpeedArgument(FFMpegCore.FFMPEG.Enums.Speed.Medium),
+                                    new ScaleArgument(ancho,alto),
+                                    new AudioCodecArgument(FFMpegCore.FFMPEG.Enums.AudioCodec.Aac, FFMpegCore.FFMPEG.Enums.AudioQuality.Normal),
+                                    new ThreadsArgument(0),
+                                    new OutputArgument(new FileInfo(outputPath))
+                                };
+
+                                encoder.Convert(container);
+                            });
+                        }
+                        catch (Exception ex) 
+                        {
+                            Console.WriteLine("Error en conversión: " + ex.Message);
+                        }
+                    }
                                       
-                   
-                    
+                    textProgressBar4.Value++;
                 }
             } else
             {
@@ -211,6 +311,16 @@ namespace Conversor
                 encoder.Kill();
                 textProgressBar3.Value = 0;
             }
+        }
+
+        private void checkBoxGPU_CheckedChanged(object sender, EventArgs e)
+        {
+            if (config == null)
+            {
+                config = new Property(rutaArchivoConfig);
+            }
+            config.set("useGPU", checkBoxGPU.Checked.ToString().ToLower());
+            config.Save();
         }
     }
 }
