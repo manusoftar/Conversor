@@ -21,6 +21,7 @@ namespace Conversor
         FFMpeg encoder;
         Property config;
         String rutaArchivoConfig = "";
+        const int BITRATE = 8000; // Bitrate en kbps
 
         public Form1()
         {
@@ -191,15 +192,15 @@ namespace Conversor
                                     // Agregar codec de GPU según el tipo detectado
                                     if (tipoGPU == "NVIDIA")
                                     {
-                                        container.Add(new CustomArgument("-c:v h264_nvenc -preset slow -rc vbr_hq -b:v 8000k"));
+                                        container.Add(new CustomArgument($"-c:v h264_nvenc -preset slow -rc vbr_hq -b:v {BITRATE}k"));
                                     }
                                     else if (tipoGPU == "AMD")
                                     {
-                                        container.Add(new CustomArgument("-c:v h264_amf -quality quality -b:v 8000k"));
+                                        container.Add(new CustomArgument($"-c:v h264_amf -quality quality -b:v {BITRATE}k"));
                                     }
                                     else if (tipoGPU == "INTEL")
                                     {
-                                        container.Add(new CustomArgument("-c:v h264_qsv -preset slow -b:v 8000k"));
+                                        container.Add(new CustomArgument($"-c:v h264_qsv -preset slow -b:v {BITRATE}k"));
                                     }
 
                                     container.Add(new AudioCodecArgument(FFMpegCore.FFMPEG.Enums.AudioCodec.Aac, FFMpegCore.FFMPEG.Enums.AudioQuality.Normal));
@@ -229,14 +230,13 @@ namespace Conversor
                     {
                         try
                         {
-                            textProgressBar3.Value = 0;
                             await Task.Run(() =>
                             {
                                 //ffmpeg -i VID_20200202_163129.mp4 -c:v libx264 -b:v 8M -minrate 8M -preset medium -vf scale=1280:720 -c:a aac -b:a 192K VID_20200202_163129_converted.mp4
                                 var container = new ArgumentContainer
                                 {
                                     new InputArgument(new VideoInfo(ruta)),
-                                    new VideoCodecArgument(FFMpegCore.FFMPEG.Enums.VideoCodec.LibX264,8000),
+                                    new VideoCodecArgument(FFMpegCore.FFMPEG.Enums.VideoCodec.LibX264, BITRATE),
                                     new SpeedArgument(FFMpegCore.FFMPEG.Enums.Speed.Medium),
                                     new ScaleArgument(ancho,alto),
                                     new AudioCodecArgument(FFMpegCore.FFMPEG.Enums.AudioCodec.Aac, FFMpegCore.FFMPEG.Enums.AudioQuality.Normal),
@@ -250,6 +250,8 @@ namespace Conversor
                         catch (Exception ex) 
                         {
                             Console.WriteLine("Error en conversión: " + ex.Message);
+                            MessageBox.Show("Error al convertir el video: " + ex.Message,
+                                           "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         }
                     }
                                       
