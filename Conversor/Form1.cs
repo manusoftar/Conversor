@@ -179,6 +179,10 @@ namespace Conversor
                                 {
                                     string customCodecArgs = "";
                                     
+                                    // Obtener duración del video para el progreso
+                                    var mediaInfo = FFProbe.Analyse(ruta);
+                                    var duration = mediaInfo.Duration;
+                                    
                                     // Agregar codec de GPU según el tipo detectado
                                     if (tipoGPU == "NVIDIA")
                                     {
@@ -209,7 +213,7 @@ namespace Conversor
                                                     textProgressBar3.Value = Math.Min(100, Convert.ToInt32(percentage));
                                                 }));
                                             }
-                                        })
+                                        }, duration)
                                         .ProcessSynchronously();
                                 });
                                 conversionExitosa = true;
@@ -235,6 +239,10 @@ namespace Conversor
                         {
                             await Task.Run(() =>
                             {
+                                // Obtener duración del video para el progreso
+                                var mediaInfo = FFProbe.Analyse(ruta);
+                                var duration = mediaInfo.Duration;
+                                
                                 FFMpegArguments
                                     .FromFileInput(ruta)
                                     .OutputToFile(outputPath, true, options => options
@@ -253,7 +261,7 @@ namespace Conversor
                                                 textProgressBar3.Value = Math.Min(100, Convert.ToInt32(percentage));
                                             }));
                                         }
-                                    })
+                                    }, duration)
                                     .ProcessSynchronously();
                             });
                         }
