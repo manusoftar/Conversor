@@ -177,7 +177,7 @@ namespace Conversor
                         // Validar que la duración sea válida
                         if (duration.TotalSeconds <= 0)
                         {
-                            MessageBox.Show($"No se pudo obtener la duración del video: {Path.GetFileName(ruta)}. Se omitirá este archivo.",
+                            MessageBox.Show($"No se pudo obtener la duración del video: {Path.GetFileName(ruta)}.\nSe omitirá este archivo.",
                                            "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                             textProgressBar4.Value++;
                             continue;
@@ -185,7 +185,6 @@ namespace Conversor
                     }
                     catch (Exception exProbe)
                     {
-                        Console.WriteLine("Error analizando video: " + exProbe.Message);
                         MessageBox.Show($"Error al analizar el video: {Path.GetFileName(ruta)}\n{exProbe.Message}\nSe omitirá este archivo.",
                                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         textProgressBar4.Value++;
