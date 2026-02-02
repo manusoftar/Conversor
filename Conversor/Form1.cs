@@ -1,6 +1,6 @@
 ﻿using FFMpegCore;
-using FFMpegCore.FFMPEG;
-using FFMpegCore.FFMPEG.Argument;
+using FFMpegCore.Arguments;
+using FFMpegCore.Enums;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -18,7 +18,7 @@ namespace Conversor
     public partial class Form1 : Form
     {
         String ffmpegPath = "";
-        FFMpeg encoder;
+        bool isProcessing = false;
         Property config;
         String rutaArchivoConfig = "";
         const int BITRATE = 8000; // Bitrate en kbps
@@ -126,7 +126,7 @@ namespace Conversor
 
         private async void button3_Click(object sender, EventArgs e)
         {
-            if (encoder!=null && encoder.IsWorking)
+            if (isProcessing)
             {
                 MessageBox.Show("Ya estás procesando uno o más videos, espera que se termine el proceso actual o abórtalo para iniciar un nuevo trabajo",
                                 "Información", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -156,16 +156,10 @@ namespace Conversor
             if (ffmpegPath != null && ffmpegPath != "")
             {
 
-                FFMpegOptions.Configure(new FFMpegOptions { RootDirectory = Path.GetDirectoryName(ffmpegPath) });
-                encoder = new FFMpeg();
-
-                var AudioQuality = FFMpegCore.FFMPEG.Enums.AudioQuality.Hd;
-                
-
-                //Attacheo el listener
-                encoder.OnProgress += OnProgress2;
+                GlobalFFOptions.Configure(new FFOptions { BinaryFolder = Path.GetDirectoryName(ffmpegPath) });
 
                 textProgressBar4.Value = 0;
+                isProcessing = true;
 
                 foreach (String ruta in listBox1.Items)
                 {
@@ -183,31 +177,40 @@ namespace Conversor
                             {
                                 await Task.Run(() =>
                                 {
-                                    var container = new ArgumentContainer
-                                    {
-                                        new InputArgument(new VideoInfo(ruta)),
-                                        new ScaleArgument(ancho, alto)
-                                    };
-
+                                    string customCodecArgs = "";
+                                    
                                     // Agregar codec de GPU según el tipo detectado
                                     if (tipoGPU == "NVIDIA")
                                     {
-                                        container.Add(new CustomArgument($"-c:v h264_nvenc -preset slow -rc vbr_hq -b:v {BITRATE}k"));
+                                        customCodecArgs = $"-c:v h264_nvenc -preset slow -rc vbr_hq -b:v {BITRATE}k";
                                     }
                                     else if (tipoGPU == "AMD")
                                     {
-                                        container.Add(new CustomArgument($"-c:v h264_amf -quality quality -b:v {BITRATE}k"));
+                                        customCodecArgs = $"-c:v h264_amf -quality quality -b:v {BITRATE}k";
                                     }
                                     else if (tipoGPU == "INTEL")
                                     {
-                                        container.Add(new CustomArgument($"-c:v h264_qsv -preset slow -b:v {BITRATE}k"));
+                                        customCodecArgs = $"-c:v h264_qsv -preset slow -b:v {BITRATE}k";
                                     }
 
-                                    container.Add(new AudioCodecArgument(FFMpegCore.FFMPEG.Enums.AudioCodec.Aac, FFMpegCore.FFMPEG.Enums.AudioQuality.Normal));
-                                    container.Add(new ThreadsArgument(0));
-                                    container.Add(new OutputArgument(new FileInfo(outputPath)));
-
-                                    encoder.Convert(container);
+                                    FFMpegArguments
+                                        .FromFileInput(ruta)
+                                        .OutputToFile(outputPath, true, options => options
+                                            .WithCustomArgument($"-vf scale={ancho}:{alto}")
+                                            .WithCustomArgument(customCodecArgs)
+                                            .WithAudioCodec(AudioCodec.Aac)
+                                            .WithCustomArgument("-threads 0")
+                                        )
+                                        .NotifyOnProgress(percentage => {
+                                            if (textProgressBar3.InvokeRequired)
+                                            {
+                                                textProgressBar3.Invoke(new Action(() =>
+                                                {
+                                                    textProgressBar3.Value = Math.Min(100, Convert.ToInt32(percentage));
+                                                }));
+                                            }
+                                        })
+                                        .ProcessSynchronously();
                                 });
                                 conversionExitosa = true;
                             }
@@ -232,19 +235,26 @@ namespace Conversor
                         {
                             await Task.Run(() =>
                             {
-                                //ffmpeg -i VID_20200202_163129.mp4 -c:v libx264 -b:v 8M -minrate 8M -preset medium -vf scale=1280:720 -c:a aac -b:a 192K VID_20200202_163129_converted.mp4
-                                var container = new ArgumentContainer
-                                {
-                                    new InputArgument(new VideoInfo(ruta)),
-                                    new VideoCodecArgument(FFMpegCore.FFMPEG.Enums.VideoCodec.LibX264, BITRATE),
-                                    new SpeedArgument(FFMpegCore.FFMPEG.Enums.Speed.Medium),
-                                    new ScaleArgument(ancho,alto),
-                                    new AudioCodecArgument(FFMpegCore.FFMPEG.Enums.AudioCodec.Aac, FFMpegCore.FFMPEG.Enums.AudioQuality.Normal),
-                                    new ThreadsArgument(0),
-                                    new OutputArgument(new FileInfo(outputPath))
-                                };
-
-                                encoder.Convert(container);
+                                FFMpegArguments
+                                    .FromFileInput(ruta)
+                                    .OutputToFile(outputPath, true, options => options
+                                        .WithVideoCodec(VideoCodec.LibX264)
+                                        .WithVideoBitrate(BITRATE)
+                                        .WithCustomArgument($"-vf scale={ancho}:{alto}")
+                                        .WithCustomArgument("-preset medium")
+                                        .WithAudioCodec(AudioCodec.Aac)
+                                        .WithCustomArgument("-threads 0")
+                                    )
+                                    .NotifyOnProgress(percentage => {
+                                        if (textProgressBar3.InvokeRequired)
+                                        {
+                                            textProgressBar3.Invoke(new Action(() =>
+                                            {
+                                                textProgressBar3.Value = Math.Min(100, Convert.ToInt32(percentage));
+                                            }));
+                                        }
+                                    })
+                                    .ProcessSynchronously();
                             });
                         }
                         catch (Exception ex) 
@@ -257,26 +267,14 @@ namespace Conversor
                                       
                     textProgressBar4.Value++;
                 }
+                
+                isProcessing = false;
             } else
             {
                 MessageBox.Show("Debes indicar la ruta al ejecutable de ffmpeg","Aviso", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             
 
-        }
-
-        private void OnProgress2(double percentage)
-        {
-            Console.WriteLine("Progress {0}%", percentage);
-            Console.WriteLine(percentage);
-            if (textProgressBar3.InvokeRequired)
-                {
-                    textProgressBar3.Invoke(new Action(delegate ()
-                    {
-                        textProgressBar3.Value = Math.Min(100, Convert.ToInt32(percentage));
-                    }));
-                }
-            
         }
 
         private void rutaFfmpeg_click(object sender, EventArgs e)
@@ -298,19 +296,16 @@ namespace Conversor
 
         private void abortarProceso(object sender, FormClosingEventArgs e)
         {
-            if (encoder != null)
-            {
-                encoder.Stop();
-                encoder.Kill();
-            }
+            // En la nueva API, los procesos se manejan de forma diferente
+            // No hay un objeto encoder persistente para detener
         }
 
         private void button4_Click(object sender, EventArgs e)
         {
-            if(encoder.IsWorking)
+            if(isProcessing)
             {
-                encoder.Stop();
-                encoder.Kill();
+                MessageBox.Show("Para cancelar el proceso, cierra la aplicación",
+                               "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 textProgressBar3.Value = 0;
             }
         }

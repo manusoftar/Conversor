@@ -77,14 +77,20 @@
     <ManifestKeyFile>Conversor_TemporaryKey.pfx</ManifestKeyFile>
   </PropertyGroup>
   <PropertyGroup>
-    <GenerateManifests>true</GenerateManifests>
+    <GenerateManifests>false</GenerateManifests>
   </PropertyGroup>
   <PropertyGroup>
-    <SignManifests>true</SignManifests>
+    <SignManifests>false</SignManifests>
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="Newtonsoft.Json, Version=12.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
       <HintPath>..\packages\Newtonsoft.Json.12.0.1\lib\net45\Newtonsoft.Json.dll</HintPath>
+    </Reference>
+    <Reference Include="FFMpegCore">
+      <HintPath>..\packages\FFMpegCore.5.1.0\lib\netstandard2.0\FFMpegCore.dll</HintPath>
+    </Reference>
+    <Reference Include="netstandard">
+      <HintPath>/usr/lib/mono/4.7.2-api/Facades/netstandard.dll</HintPath>
     </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
@@ -140,10 +146,6 @@
     <None Include="App.config" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\FFMpegCore\FFMpegCore\FFMpegCore.csproj">
-      <Project>{ec1bd93a-62d2-4080-9812-400bde62aa57}</Project>
-      <Name>FFMpegCore</Name>
-    </ProjectReference>
     <ProjectReference Include="..\TextProgressBar\TextProgressBar.csproj">
       <Project>{19E19EDC-8A19-4059-BA6E-0DE1AC4A8AEE}</Project>
       <Name>TextProgressBar</Name>
