@@ -168,8 +168,29 @@ namespace Conversor
                     bool conversionExitosa = false;
 
                     // Obtener duración del video para el progreso (una sola vez, de forma asíncrona)
-                    var mediaInfo = await Task.Run(() => FFProbe.Analyse(ruta));
-                    var duration = mediaInfo.Duration;
+                    TimeSpan duration;
+                    try
+                    {
+                        var mediaInfo = await Task.Run(() => FFProbe.Analyse(ruta));
+                        duration = mediaInfo.Duration;
+                        
+                        // Validar que la duración sea válida
+                        if (duration.TotalSeconds <= 0)
+                        {
+                            MessageBox.Show($"No se pudo obtener la duración del video: {Path.GetFileName(ruta)}. Se omitirá este archivo.",
+                                           "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            textProgressBar4.Value++;
+                            continue;
+                        }
+                    }
+                    catch (Exception exProbe)
+                    {
+                        Console.WriteLine("Error analizando video: " + exProbe.Message);
+                        MessageBox.Show($"Error al analizar el video: {Path.GetFileName(ruta)}\n{exProbe.Message}\nSe omitirá este archivo.",
+                                       "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        textProgressBar4.Value++;
+                        continue;
+                    }
 
                     // Intentar con GPU si está habilitado
                     if (checkBoxGPU.Checked)
