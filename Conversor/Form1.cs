@@ -167,8 +167,8 @@ namespace Conversor
                     String outputPath = textBox1.Text + "\\" + Path.GetFileNameWithoutExtension(ruta) + "_convertido.mp4";
                     bool conversionExitosa = false;
 
-                    // Obtener duración del video para el progreso (una sola vez)
-                    var mediaInfo = FFProbe.Analyse(ruta);
+                    // Obtener duración del video para el progreso (una sola vez, de forma asíncrona)
+                    var mediaInfo = await Task.Run(() => FFProbe.Analyse(ruta));
                     var duration = mediaInfo.Duration;
 
                     // Intentar con GPU si está habilitado
