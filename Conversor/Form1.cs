@@ -167,6 +167,10 @@ namespace Conversor
                     String outputPath = textBox1.Text + "\\" + Path.GetFileNameWithoutExtension(ruta) + "_convertido.mp4";
                     bool conversionExitosa = false;
 
+                    // Obtener duración del video para el progreso (una sola vez)
+                    var mediaInfo = FFProbe.Analyse(ruta);
+                    var duration = mediaInfo.Duration;
+
                     // Intentar con GPU si está habilitado
                     if (checkBoxGPU.Checked)
                     {
@@ -178,10 +182,6 @@ namespace Conversor
                                 await Task.Run(() =>
                                 {
                                     string customCodecArgs = "";
-                                    
-                                    // Obtener duración del video para el progreso
-                                    var mediaInfo = FFProbe.Analyse(ruta);
-                                    var duration = mediaInfo.Duration;
                                     
                                     // Agregar codec de GPU según el tipo detectado
                                     if (tipoGPU == "NVIDIA")
@@ -239,10 +239,6 @@ namespace Conversor
                         {
                             await Task.Run(() =>
                             {
-                                // Obtener duración del video para el progreso
-                                var mediaInfo = FFProbe.Analyse(ruta);
-                                var duration = mediaInfo.Duration;
-                                
                                 FFMpegArguments
                                     .FromFileInput(ruta)
                                     .OutputToFile(outputPath, true, options => options
