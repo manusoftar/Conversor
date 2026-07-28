@@ -1,0 +1,73 @@
+name: Build and Release (Windows .NET Framework)
+
+on:
+  push:
+    tags:
+      - 'v*' # ej: v1.0.0
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+
+    env:
+      SOLUTION_PATH: Conversor.sln
+      PROJECT_DIR: Conversor
+      CONFIGURATION: Release
+      PLATFORM: Any CPU
+      EXE_NAME: Conversor.exe
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Restore packages
+        run: nuget restore $env:SOLUTION_PATH
+
+      - name: Build solution
+        shell: pwsh
+        run: |
+          msbuild $env:SOLUTION_PATH `
+            /p:Configuration="$env:CONFIGURATION" `
+            /p:Platform="$env:PLATFORM" `
+            /m
+
+      - name: Verify output
+        shell: pwsh
+        run: |
+          $exePath = Join-Path $env:PROJECT_DIR "bin\Release\$env:EXE_NAME"
+          if (!(Test-Path $exePath)) {
+            Write-Error "No se encontró el ejecutable en: $exePath"
+            exit 1
+          }
+          Write-Host "OK -> $exePath"
+
+      - name: Prepare artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $exePath = Join-Path $env:PROJECT_DIR "bin\Release\$env:EXE_NAME"
+
+          Copy-Item $exePath "artifacts\$env:EXE_NAME" -Force
+
+          Compress-Archive `
+            -Path "artifacts\$env:EXE_NAME" `
+            -DestinationPath "artifacts/Conversor-${{ github.ref_name }}-win-x64.zip" `
+            -Force
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/Conversor.exe
+            artifacts/Conversor-${{ github.ref_name }}-win-x64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -51,6 +51,7 @@ namespace Conversor
             this.textProgressBar3 = new TextProgressBar.TextProgressBar();
             this.textProgressBar4 = new TextProgressBar.TextProgressBar();
             this.button4 = new System.Windows.Forms.Button();
+            this.checkBoxGPU = new System.Windows.Forms.CheckBox();
             this.groupBox1.SuspendLayout();
             this.SuspendLayout();
             // 
@@ -236,11 +237,22 @@ namespace Conversor
             this.button4.UseVisualStyleBackColor = true;
             this.button4.Click += new System.EventHandler(this.button4_Click);
             // 
+            // checkBoxGPU
+            // 
+            this.checkBoxGPU.AutoSize = true;
+            this.checkBoxGPU.Location = new System.Drawing.Point(268, 123);
+            this.checkBoxGPU.Name = "checkBoxGPU";
+            this.checkBoxGPU.Size = new System.Drawing.Size(245, 17);
+            this.checkBoxGPU.TabIndex = 16;
+            this.checkBoxGPU.Text = "Usar aceleración por GPU (si está disponible)";
+            this.checkBoxGPU.UseVisualStyleBackColor = true;
+            // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(800, 511);
+            this.Controls.Add(this.checkBoxGPU);
             this.Controls.Add(this.button4);
             this.Controls.Add(this.textProgressBar4);
             this.Controls.Add(this.textProgressBar3);
@@ -291,6 +303,7 @@ namespace Conversor
         private TextProgressBar.TextProgressBar textProgressBar3;
         private TextProgressBar.TextProgressBar textProgressBar4;
         private System.Windows.Forms.Button button4;
+        private System.Windows.Forms.CheckBox checkBoxGPU;
     }
 }
 
