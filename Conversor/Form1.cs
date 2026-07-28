@@ -166,7 +166,7 @@ namespace Conversor
             {
                 checkBoxGPU.Enabled = false;
                 checkBoxGPU.Checked = false;
-                lblGpuStatus.Text = "Sin GPU compatible detectada - se usara CPU";
+                lblGpuStatus.Text = "Sin GPU compatible detectada - se usará CPU";
                 lblGpuStatus.ForeColor = System.Drawing.Color.Red;
             }
         }
@@ -239,7 +239,7 @@ namespace Conversor
             AppendLog("=== Inicio del proceso ===");
             AppendLog("FFmpeg: " + ffmpegPath);
             AppendLog("Destino: " + textBox1.Text);
-            AppendLog("Resolucion: " + ancho + "x" + alto);
+            AppendLog("Resolución: " + ancho + "x" + alto);
             AppendLog("GPU habilitada: " + (checkBoxGPU.Checked && checkBoxGPU.Enabled ? "si" : "no"));
             AppendLog("Videos a procesar: " + listBox1.Items.Count);
 
@@ -265,13 +265,13 @@ namespace Conversor
                         
                         if (duration.TotalSeconds <= 0)
                         {
-                            AppendLog("    [AVISO] Duracion invalida, se omitira este archivo");
+                            AppendLog("    [AVISO] Duración inválida, se omitirá este archivo");
                             MessageBox.Show($"No se pudo obtener la duración del video: {Path.GetFileName(ruta)}.\nSe omitirá este archivo.",
                                            "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                             textProgressBar4.Value++;
                             continue;
                         }
-                        AppendLog("    Duracion: " + duration.ToString(@"hh\:mm\:ss"));
+                        AppendLog("    Duración: " + duration.ToString(@"hh\:mm\:ss"));
                     }
                     catch (Exception exProbe)
                     {
@@ -300,7 +300,7 @@ namespace Conversor
                                     customCodecArgs = "-c:v h264_qsv -preset slow -b:v " + BITRATE + "k";
 
                                 AppendLog("    GPU (" + tipoGPU + ") codec: " + customCodecArgs);
-                                AppendLog("    Iniciando conversion con GPU...");
+                                AppendLog("    Iniciando conversión con GPU...");
 
                                 string capturedCodecArgs = customCodecArgs;
                                 await Task.Run(() =>
@@ -325,7 +325,7 @@ namespace Conversor
                                         .ProcessSynchronously();
                                 });
                                 conversionExitosa = true;
-                                AppendLog("    [OK] Conversion con GPU completada");
+                                AppendLog("    [OK] Conversión con GPU completada");
                             }
                             catch (Exception exGPU)
                             {
@@ -337,7 +337,7 @@ namespace Conversor
                         }
                         else
                         {
-                            AppendLog("    [AVISO] No se detecto GPU compatible, usando CPU");
+                            AppendLog("    [AVISO] No se detectó GPU compatible, usando CPU");
                             MessageBox.Show("No se detectó una GPU compatible (NVIDIA, AMD o Intel). Se usará CPU.",
                                            "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         }
@@ -349,7 +349,7 @@ namespace Conversor
                         try
                         {
                             AppendLog("    CPU codec: libx264, bitrate=" + BITRATE + "k, escala=" + ancho + "x" + alto + ", preset=medium");
-                            AppendLog("    Iniciando conversion con CPU...");
+                            AppendLog("    Iniciando conversión con CPU...");
 
                             await Task.Run(() =>
                             {
@@ -374,11 +374,11 @@ namespace Conversor
                                     }, duration)
                                     .ProcessSynchronously();
                             });
-                            AppendLog("    [OK] Conversion con CPU completada");
+                            AppendLog("    [OK] Conversión con CPU completada");
                         }
                         catch (Exception ex)
                         {
-                            AppendLog("    [ERROR] Conversion fallida: " + ex.Message);
+                            AppendLog("    [ERROR] Conversión fallida: " + ex.Message);
                             MessageBox.Show("Error al convertir el video: " + ex.Message,
                                            "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         }
