@@ -52,6 +52,9 @@ namespace Conversor
             this.textProgressBar4 = new TextProgressBar.TextProgressBar();
             this.button4 = new System.Windows.Forms.Button();
             this.checkBoxGPU = new System.Windows.Forms.CheckBox();
+            this.lblGpuStatus = new System.Windows.Forms.Label();
+            this.lblLogTitle = new System.Windows.Forms.Label();
+            this.txtLog = new System.Windows.Forms.TextBox();
             this.groupBox1.SuspendLayout();
             this.SuspendLayout();
             // 
@@ -247,12 +250,47 @@ namespace Conversor
             this.checkBoxGPU.Text = "Usar aceleración por GPU (si está disponible)";
             this.checkBoxGPU.UseVisualStyleBackColor = true;
             // 
+            // lblGpuStatus
+            // 
+            this.lblGpuStatus.AutoSize = false;
+            this.lblGpuStatus.ForeColor = System.Drawing.Color.Gray;
+            this.lblGpuStatus.Location = new System.Drawing.Point(516, 124);
+            this.lblGpuStatus.Name = "lblGpuStatus";
+            this.lblGpuStatus.Size = new System.Drawing.Size(268, 17);
+            this.lblGpuStatus.TabIndex = 17;
+            this.lblGpuStatus.Text = "Detectando GPU...";
+            // 
+            // lblLogTitle
+            // 
+            this.lblLogTitle.AutoSize = true;
+            this.lblLogTitle.Location = new System.Drawing.Point(12, 510);
+            this.lblLogTitle.Name = "lblLogTitle";
+            this.lblLogTitle.Size = new System.Drawing.Size(88, 13);
+            this.lblLogTitle.TabIndex = 18;
+            this.lblLogTitle.Text = "Log del proceso:";
+            // 
+            // txtLog
+            // 
+            this.txtLog.BackColor = System.Drawing.Color.Black;
+            this.txtLog.Font = new System.Drawing.Font("Courier New", 8F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.txtLog.ForeColor = System.Drawing.Color.Lime;
+            this.txtLog.Location = new System.Drawing.Point(15, 527);
+            this.txtLog.Multiline = true;
+            this.txtLog.Name = "txtLog";
+            this.txtLog.ReadOnly = true;
+            this.txtLog.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
+            this.txtLog.Size = new System.Drawing.Size(773, 155);
+            this.txtLog.TabIndex = 19;
+            // 
             // Form1
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(800, 511);
+            this.ClientSize = new System.Drawing.Size(800, 700);
             this.Controls.Add(this.checkBoxGPU);
+            this.Controls.Add(this.lblGpuStatus);
+            this.Controls.Add(this.lblLogTitle);
+            this.Controls.Add(this.txtLog);
             this.Controls.Add(this.button4);
             this.Controls.Add(this.textProgressBar4);
             this.Controls.Add(this.textProgressBar3);
@@ -304,6 +342,9 @@ namespace Conversor
         private TextProgressBar.TextProgressBar textProgressBar4;
         private System.Windows.Forms.Button button4;
         private System.Windows.Forms.CheckBox checkBoxGPU;
+        private System.Windows.Forms.Label lblGpuStatus;
+        private System.Windows.Forms.Label lblLogTitle;
+        private System.Windows.Forms.TextBox txtLog;
     }
 }
 
