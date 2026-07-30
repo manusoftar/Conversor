@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 
 namespace Conversor
@@ -40,16 +41,19 @@ namespace Conversor
         {
             this.filename = filename;
 
+            String directory = Path.GetDirectoryName(filename);
+            if (!String.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
+                Directory.CreateDirectory(directory);
+
             if (!System.IO.File.Exists(filename))
-                System.IO.File.Create(filename);
+                using (System.IO.File.Create(filename)) { }
 
-            System.IO.StreamWriter file = new System.IO.StreamWriter(filename);
-
-            foreach (String prop in list.Keys.ToArray())
-                if (!String.IsNullOrWhiteSpace(list[prop]))
-                    file.WriteLine(prop + "=" + list[prop]);
-
-            file.Close();
+            using (System.IO.StreamWriter file = new System.IO.StreamWriter(filename))
+            {
+                foreach (String prop in list.Keys.ToArray())
+                    if (!String.IsNullOrWhiteSpace(list[prop]))
+                        file.WriteLine(prop + "=" + list[prop]);
+            }
         }
 
         public void reload()
@@ -65,7 +69,7 @@ namespace Conversor
             if (System.IO.File.Exists(filename))
                 loadFromFile(filename);
             else
-                System.IO.File.Create(filename);
+                using (System.IO.File.Create(filename)) { }
         }
 
         private void loadFromFile(String file)

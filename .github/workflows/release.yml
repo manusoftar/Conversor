@@ -43,23 +43,38 @@ jobs:
       - name: Verify output
         shell: pwsh
         run: |
-          $exePath = Join-Path $env:PROJECT_DIR "bin\Release\$env:EXE_NAME"
-          if (!(Test-Path $exePath)) {
-            Write-Error "No se encontró el ejecutable en: $exePath"
+          $outputDir = Join-Path $env:PROJECT_DIR "bin\Release"
+          $requiredFiles = @(
+            $env:EXE_NAME,
+            "FFMpegCore.dll",
+            "TextProgressBar.dll"
+          )
+
+          foreach ($file in $requiredFiles) {
+            $path = Join-Path $outputDir $file
+            if (!(Test-Path $path)) {
+              Write-Error "No se encontró el archivo requerido: $path"
+              exit 1
+            }
+          }
+
+          if (!(Test-Path $outputDir)) {
+            Write-Error "No se encontró el directorio de salida: $outputDir"
             exit 1
           }
-          Write-Host "OK -> $exePath"
+          Write-Host "OK -> $outputDir"
 
       - name: Prepare artifacts
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          $exePath = Join-Path $env:PROJECT_DIR "bin\Release\$env:EXE_NAME"
+          $outputDir = Join-Path $env:PROJECT_DIR "bin\Release"
+          $artifactDir = Join-Path "artifacts" "Conversor"
 
-          Copy-Item $exePath "artifacts\$env:EXE_NAME" -Force
+          New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
+          Copy-Item (Join-Path $outputDir "*") $artifactDir -Recurse -Force
 
           Compress-Archive `
-            -Path "artifacts\$env:EXE_NAME" `
+            -Path "$artifactDir\*" `
             -DestinationPath "artifacts/Conversor-${{ github.ref_name }}-win-x64.zip" `
             -Force
 
@@ -67,7 +82,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/Conversor.exe
             artifacts/Conversor-${{ github.ref_name }}-win-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

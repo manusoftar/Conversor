@@ -9,6 +9,7 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -21,27 +22,33 @@ namespace Conversor
         bool isProcessing = false;
         Property config;
         String rutaArchivoConfig = "";
+        String installDirectory = "";
         const int BITRATE = 8000; // Bitrate en kbps
+        const string DefaultLogFileName = "Conversor.log";
 
         public Form1()
         {
             InitializeComponent();
+            AppLogger.RegisterSink(AppendLogToConsole);
 
             //Verifico si hay archivo de configuración
             String ruta = Application.ExecutablePath;
-            String ubicacion = Path.GetDirectoryName(ruta);
-            rutaArchivoConfig = ubicacion + "\\config.cfg";
+            installDirectory = Path.GetDirectoryName(ruta);
+            rutaArchivoConfig = Path.Combine(installDirectory, "config.cfg");
 
-            if (System.IO.File.Exists(rutaArchivoConfig))
-            {
-                config = new Property(rutaArchivoConfig);
-                ffmpegPath = config.get("ffmpegPath");
-                textBox2.Text = ffmpegPath;
-                
-                // Cargar preferencia de GPU
-                String useGPU = config.get("useGPU", "false");
-                checkBoxGPU.Checked = useGPU.ToLower() == "true";
-            }
+            bool configExists = System.IO.File.Exists(rutaArchivoConfig);
+            config = new Property(rutaArchivoConfig);
+            InicializarConfiguracion(configExists);
+            ConfigurarArchivoDeLog();
+
+            ffmpegPath = ResolverRutaFfmpeg();
+            textBox2.Text = ffmpegPath;
+
+            // Cargar preferencia de GPU
+            String useGPU = config.get("useGPU", "false");
+            checkBoxGPU.Checked = useGPU.ToLower() == "true";
+
+            RegistrarDiagnosticosDeInicio();
 
             // Detectar GPU y actualizar estado (antes de conectar el evento para no disparar guardado)
             InicializarEstadoGPU();
@@ -119,7 +126,7 @@ namespace Conversor
             }
             catch (Exception ex)
             {
-                AppendLog("[WARN] Error detectando GPU: " + ex.Message);
+                AppLogger.Exception("Error detectando GPU.", ex);
             }
             return null;
         }
@@ -144,7 +151,7 @@ namespace Conversor
             }
             catch (Exception ex)
             {
-                AppendLog("[WARN] Error detectando GPU: " + ex.Message);
+                AppLogger.Exception("Error detectando GPU.", ex);
             }
             return null;
         }
@@ -171,14 +178,14 @@ namespace Conversor
             }
         }
 
-        private void AppendLog(string msg)
+        private void AppendLogToConsole(string msg)
         {
             if (txtLog.InvokeRequired)
             {
-                txtLog.Invoke(new Action(() => AppendLog(msg)));
+                txtLog.Invoke(new Action(() => AppendLogToConsole(msg)));
                 return;
             }
-            txtLog.AppendText("[" + DateTime.Now.ToString("HH:mm:ss") + "] " + msg + Environment.NewLine);
+            txtLog.AppendText(msg + Environment.NewLine);
             txtLog.ScrollToCaret();
         }
 
@@ -195,6 +202,14 @@ namespace Conversor
             if (string.IsNullOrWhiteSpace(ffmpegPath))
             {
                 MessageBox.Show("Debes indicar la ruta al ejecutable de ffmpeg", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            string ffmpegValidationError;
+            if (!ValidarRutaFfmpeg(ffmpegPath, out ffmpegValidationError))
+            {
+                MessageBox.Show(ffmpegValidationError, "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AppLogger.Warn(ffmpegValidationError);
                 return;
             }
 
@@ -236,12 +251,12 @@ namespace Conversor
             button3.Enabled = false;
             txtLog.Clear();
 
-            AppendLog("=== Inicio del proceso ===");
-            AppendLog("FFmpeg: " + ffmpegPath);
-            AppendLog("Destino: " + textBox1.Text);
-            AppendLog("Resolución: " + ancho + "x" + alto);
-            AppendLog("GPU habilitada: " + (checkBoxGPU.Checked && checkBoxGPU.Enabled ? "si" : "no"));
-            AppendLog("Videos a procesar: " + listBox1.Items.Count);
+            AppLogger.Info("=== Inicio del proceso ===");
+            AppLogger.Info("FFmpeg: " + ffmpegPath);
+            AppLogger.Info("Destino: " + textBox1.Text);
+            AppLogger.Info("Resolución: " + ancho + "x" + alto);
+            AppLogger.Info("GPU habilitada: " + (checkBoxGPU.Checked && checkBoxGPU.Enabled ? "si" : "no"));
+            AppLogger.Info("Videos a procesar: " + listBox1.Items.Count);
 
             try
             {
@@ -251,31 +266,31 @@ namespace Conversor
                     String outputPath = textBox1.Text + "\\" + Path.GetFileNameWithoutExtension(ruta) + "_convertido.mp4";
                     bool conversionExitosa = false;
 
-                    AppendLog("--- Procesando: " + Path.GetFileName(ruta));
-                    AppendLog("    Entrada: " + ruta);
-                    AppendLog("    Salida:  " + outputPath);
+                    AppLogger.Info("--- Procesando: " + Path.GetFileName(ruta));
+                    AppLogger.Info("    Entrada: " + ruta);
+                    AppLogger.Info("    Salida:  " + outputPath);
 
                     // Obtener duración del video para el progreso
                     TimeSpan duration;
                     try
                     {
-                        AppendLog("    Analizando video con ffprobe...");
+                        AppLogger.Info("    Analizando video con ffprobe...");
                         var mediaInfo = await Task.Run(() => FFProbe.Analyse(ruta));
                         duration = mediaInfo.Duration;
                         
                         if (duration.TotalSeconds <= 0)
                         {
-                            AppendLog("    [AVISO] Duración inválida, se omitirá este archivo");
+                            AppLogger.Warn("    Duración inválida, se omitirá este archivo");
                             MessageBox.Show($"No se pudo obtener la duración del video: {Path.GetFileName(ruta)}.\nSe omitirá este archivo.",
                                            "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                             textProgressBar4.Value++;
                             continue;
                         }
-                        AppendLog("    Duración: " + duration.ToString(@"hh\:mm\:ss"));
+                        AppLogger.Info("    Duración: " + duration.ToString(@"hh\:mm\:ss"));
                     }
                     catch (Exception exProbe)
                     {
-                        AppendLog("    [ERROR] No se pudo analizar el video: " + exProbe.Message);
+                        AppLogger.Exception("No se pudo analizar el video: " + Path.GetFileName(ruta), exProbe);
                         MessageBox.Show($"Error al analizar el video: {Path.GetFileName(ruta)}\n{exProbe.Message}\nSe omitirá este archivo.",
                                        "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         textProgressBar4.Value++;
@@ -299,8 +314,8 @@ namespace Conversor
                                 else if (tipoGPU == "INTEL")
                                     customCodecArgs = "-c:v h264_qsv -preset slow -b:v " + BITRATE + "k";
 
-                                AppendLog("    GPU (" + tipoGPU + ") codec: " + customCodecArgs);
-                                AppendLog("    Iniciando conversión con GPU...");
+                                AppLogger.Info("    GPU (" + tipoGPU + ") codec: " + customCodecArgs);
+                                AppLogger.Info("    Iniciando conversión con GPU...");
 
                                 string capturedCodecArgs = customCodecArgs;
                                 await Task.Run(() =>
@@ -325,19 +340,19 @@ namespace Conversor
                                         .ProcessSynchronously();
                                 });
                                 conversionExitosa = true;
-                                AppendLog("    [OK] Conversión con GPU completada");
+                                AppLogger.Info("    [OK] Conversión con GPU completada");
                             }
                             catch (Exception exGPU)
                             {
-                                AppendLog("    [AVISO] GPU fallo: " + exGPU.Message);
-                                AppendLog("    Intentando con CPU como alternativa...");
+                                AppLogger.Exception("Falló la conversión con GPU.", exGPU);
+                                AppLogger.Info("    Intentando con CPU como alternativa...");
                                 MessageBox.Show("La conversión con GPU falló. Se intentará con CPU.",
                                                "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                             }
                         }
                         else
                         {
-                            AppendLog("    [AVISO] No se detectó GPU compatible, usando CPU");
+                            AppLogger.Warn("    No se detectó GPU compatible, usando CPU");
                             MessageBox.Show("No se detectó una GPU compatible (NVIDIA, AMD o Intel). Se usará CPU.",
                                            "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         }
@@ -348,8 +363,8 @@ namespace Conversor
                     {
                         try
                         {
-                            AppendLog("    CPU codec: libx264, bitrate=" + BITRATE + "k, escala=" + ancho + "x" + alto + ", preset=medium");
-                            AppendLog("    Iniciando conversión con CPU...");
+                            AppLogger.Info("    CPU codec: libx264, bitrate=" + BITRATE + "k, escala=" + ancho + "x" + alto + ", preset=medium");
+                            AppLogger.Info("    Iniciando conversión con CPU...");
 
                             await Task.Run(() =>
                             {
@@ -374,11 +389,11 @@ namespace Conversor
                                     }, duration)
                                     .ProcessSynchronously();
                             });
-                            AppendLog("    [OK] Conversión con CPU completada");
+                            AppLogger.Info("    [OK] Conversión con CPU completada");
                         }
                         catch (Exception ex)
                         {
-                            AppendLog("    [ERROR] Conversión fallida: " + ex.Message);
+                            AppLogger.Exception("Conversión fallida para el video: " + Path.GetFileName(ruta), ex);
                             MessageBox.Show("Error al convertir el video: " + ex.Message,
                                            "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         }
@@ -387,11 +402,11 @@ namespace Conversor
                     textProgressBar4.Value++;
                 }
 
-                AppendLog("=== Proceso finalizado ===");
+                AppLogger.Info("=== Proceso finalizado ===");
             }
             catch (Exception exGlobal)
             {
-                AppendLog("[ERROR CRITICO] " + exGlobal.Message);
+                AppLogger.Exception("Error inesperado durante el proceso.", exGlobal);
                 MessageBox.Show("Error inesperado durante el proceso: " + exGlobal.Message,
                                "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
@@ -409,14 +424,22 @@ namespace Conversor
             openFileDialog1.Multiselect = false;
             openFileDialog1.ShowDialog();
 
+            if (string.IsNullOrWhiteSpace(openFileDialog1.FileName))
+                return;
+
+            string validationError;
+            if (!ValidarRutaFfmpeg(openFileDialog1.FileName, out validationError))
+            {
+                AppLogger.Warn(validationError);
+                MessageBox.Show(validationError, "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
             ffmpegPath = openFileDialog1.FileName;
             textBox2.Text = ffmpegPath;
 
-            if (config == null) {
-                config = new Property(rutaArchivoConfig);
-            }
             config.set("ffmpegPath", ffmpegPath);
-            config.Save();
+            GuardarConfiguracion();
         }
 
         private void abortarProceso(object sender, FormClosingEventArgs e)
@@ -437,12 +460,177 @@ namespace Conversor
 
         private void checkBoxGPU_CheckedChanged(object sender, EventArgs e)
         {
-            if (config == null)
-            {
-                config = new Property(rutaArchivoConfig);
-            }
             config.set("useGPU", checkBoxGPU.Checked.ToString().ToLower());
-            config.Save();
+            GuardarConfiguracion();
+        }
+
+        private void InicializarConfiguracion(bool configExists)
+        {
+            bool changed = false;
+            changed |= AsegurarValorConfiguracion("ffmpegPath", "");
+            changed |= AsegurarValorConfiguracion("useGPU", "false");
+            changed |= AsegurarValorConfiguracion("enableFileLogging", "false");
+            changed |= AsegurarValorConfiguracion("logFilePath", Path.Combine(installDirectory, DefaultLogFileName));
+
+            if (changed)
+                GuardarConfiguracion();
+
+            if (!configExists)
+                AppLogger.Info("No se encontró config.cfg. Se creó uno nuevo con valores por defecto.");
+        }
+
+        private bool AsegurarValorConfiguracion(string key, string value)
+        {
+            if (config.get(key) != null)
+                return false;
+
+            config.set(key, value);
+            return true;
+        }
+
+        private void ConfigurarArchivoDeLog()
+        {
+            bool enableFileLogging = config.get("enableFileLogging", "false").Equals("true", StringComparison.OrdinalIgnoreCase);
+            string logPath = NormalizarRuta(config.get("logFilePath", Path.Combine(installDirectory, DefaultLogFileName)));
+
+            config.set("logFilePath", logPath);
+            GuardarConfiguracion();
+
+            AppLogger.ConfigureFileLogging(enableFileLogging, logPath);
+
+            if (enableFileLogging)
+                AppLogger.Info("Log a archivo habilitado: " + logPath);
+        }
+
+        private string ResolverRutaFfmpeg()
+        {
+            string configuredPath = config.get("ffmpegPath", "");
+            string detectedPath = DetectarRutaFfmpeg(configuredPath);
+
+            if (!String.Equals(configuredPath ?? "", detectedPath ?? "", StringComparison.OrdinalIgnoreCase))
+            {
+                config.set("ffmpegPath", detectedPath ?? "");
+                GuardarConfiguracion();
+            }
+
+            return detectedPath ?? "";
+        }
+
+        private string DetectarRutaFfmpeg(string configuredPath)
+        {
+            string validationError;
+            string bundledPath = Path.Combine(installDirectory, "ffmpeg.exe");
+
+            if (ValidarRutaFfmpeg(bundledPath, out validationError))
+            {
+                AppLogger.Info("Se usará el FFmpeg empaquetado junto a la aplicación.");
+                return bundledPath;
+            }
+
+            if (!String.IsNullOrWhiteSpace(configuredPath) && ValidarRutaFfmpeg(configuredPath, out validationError))
+                return configuredPath;
+
+            if (!String.IsNullOrWhiteSpace(configuredPath))
+                AppLogger.Warn("La ruta configurada para FFmpeg no es válida: " + validationError);
+
+            string pathExecutable = BuscarEnPath("ffmpeg.exe");
+            if (ValidarRutaFfmpeg(pathExecutable, out validationError))
+            {
+                AppLogger.Info("Se encontró FFmpeg en PATH: " + pathExecutable);
+                return pathExecutable;
+            }
+
+            return "";
+        }
+
+        private string BuscarEnPath(string fileName)
+        {
+            string pathVariable = Environment.GetEnvironmentVariable("PATH");
+            if (String.IsNullOrWhiteSpace(pathVariable))
+                return "";
+
+            foreach (string candidateDirectory in pathVariable.Split(Path.PathSeparator))
+            {
+                if (String.IsNullOrWhiteSpace(candidateDirectory))
+                    continue;
+
+                try
+                {
+                    string candidate = Path.Combine(candidateDirectory.Trim(), fileName);
+                    if (File.Exists(candidate))
+                        return candidate;
+                }
+                catch
+                {
+                }
+            }
+
+            return "";
+        }
+
+        private bool ValidarRutaFfmpeg(string candidatePath, out string validationError)
+        {
+            validationError = "Debes indicar una ruta válida al ejecutable de ffmpeg.";
+
+            if (String.IsNullOrWhiteSpace(candidatePath))
+                return false;
+
+            string normalizedPath = NormalizarRuta(candidatePath);
+            if (!File.Exists(normalizedPath))
+            {
+                validationError = "No se encontró ffmpeg.exe en la ruta indicada.";
+                return false;
+            }
+
+            if (!String.Equals(Path.GetFileName(normalizedPath), "ffmpeg.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                validationError = "Debes seleccionar el archivo ffmpeg.exe.";
+                return false;
+            }
+
+            string ffprobePath = Path.Combine(Path.GetDirectoryName(normalizedPath), "ffprobe.exe");
+            if (!File.Exists(ffprobePath))
+            {
+                validationError = "No se encontró ffprobe.exe en la misma carpeta que ffmpeg.exe.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private string NormalizarRuta(string path)
+        {
+            if (String.IsNullOrWhiteSpace(path))
+                return path;
+
+            if (Path.IsPathRooted(path))
+                return Path.GetFullPath(path);
+
+            return Path.GetFullPath(Path.Combine(installDirectory, path));
+        }
+
+        private void GuardarConfiguracion()
+        {
+            try
+            {
+                config.Save();
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Exception("No se pudo guardar el archivo de configuración.", ex);
+            }
+        }
+
+        private void RegistrarDiagnosticosDeInicio()
+        {
+            Assembly ffmpegCoreAssembly = typeof(FFMpegArguments).Assembly;
+            AppLogger.Info("Conversor iniciado en: " + installDirectory);
+            AppLogger.Info("FFMpegCore ensamblado: " + ffmpegCoreAssembly.GetName().Version + " (" + ffmpegCoreAssembly.Location + ")");
+
+            if (String.IsNullOrWhiteSpace(ffmpegPath))
+                AppLogger.Warn("No se encontró una instalación válida de FFmpeg. Selecciona ffmpeg.exe manualmente.");
+            else
+                AppLogger.Info("Ruta activa de FFmpeg: " + ffmpegPath);
         }
     }
 }
