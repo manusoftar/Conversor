@@ -23,6 +23,7 @@ namespace Conversor
         Property config;
         String rutaArchivoConfig = "";
         String installDirectory = "";
+        String dataDirectory = ""; // carpeta donde viven config.cfg y el log (instalación, o LocalAppData si no es escribible)
         const int BITRATE = 8000; // Bitrate en kbps
         const string DefaultLogFileName = "Conversor.log";
 
@@ -34,7 +35,8 @@ namespace Conversor
             //Verifico si hay archivo de configuración
             String ruta = Application.ExecutablePath;
             installDirectory = Path.GetDirectoryName(ruta);
-            rutaArchivoConfig = Path.Combine(installDirectory, "config.cfg");
+            rutaArchivoConfig = ElegirRutaConfiguracion(installDirectory);
+            dataDirectory = Path.GetDirectoryName(rutaArchivoConfig);
 
             bool configExists = System.IO.File.Exists(rutaArchivoConfig);
             config = new Property(rutaArchivoConfig);
@@ -470,7 +472,7 @@ namespace Conversor
             changed |= AsegurarValorConfiguracion("ffmpegPath", "");
             changed |= AsegurarValorConfiguracion("useGPU", "false");
             changed |= AsegurarValorConfiguracion("enableFileLogging", "false");
-            changed |= AsegurarValorConfiguracion("logFilePath", Path.Combine(installDirectory, DefaultLogFileName));
+            changed |= AsegurarValorConfiguracion("logFilePath", Path.Combine(dataDirectory, DefaultLogFileName));
 
             if (changed)
                 GuardarConfiguracion();
@@ -491,7 +493,7 @@ namespace Conversor
         private void ConfigurarArchivoDeLog()
         {
             bool enableFileLogging = config.get("enableFileLogging", "false").Equals("true", StringComparison.OrdinalIgnoreCase);
-            string logPath = NormalizarRuta(config.get("logFilePath", Path.Combine(installDirectory, DefaultLogFileName)));
+            string logPath = NormalizarRuta(config.get("logFilePath", Path.Combine(dataDirectory, DefaultLogFileName)));
 
             config.set("logFilePath", logPath);
             GuardarConfiguracion();
@@ -607,6 +609,47 @@ namespace Conversor
                 return Path.GetFullPath(path);
 
             return Path.GetFullPath(Path.Combine(installDirectory, path));
+        }
+
+        /// <summary>
+        /// config.cfg va junto al ejecutable. Si esa carpeta no es escribible (por ejemplo
+        /// Program Files, o el archivo es de solo lectura) se usa %LocalAppData%\Conversor.
+        /// Si ya existe un config.cfg en LocalAppData de una ejecución anterior, se respeta.
+        /// </summary>
+        private string ElegirRutaConfiguracion(string installDir)
+        {
+            string preferida = Path.Combine(installDir, "config.cfg");
+            if (PuedeEscribirArchivo(preferida))
+                return preferida;
+
+            string alternativa = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Conversor", "config.cfg");
+
+            AppLogger.Warn("No hay permiso de escritura en " + installDir + ". La configuración se guardará en " + alternativa);
+            return alternativa;
+        }
+
+        private static bool PuedeEscribirArchivo(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    // Abrir para escritura sin modificar el contenido
+                    using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) { }
+                    return true;
+                }
+
+                // No existe: comprobar que se puede crear en esa carpeta
+                string probe = Path.Combine(Path.GetDirectoryName(path), ".write-test-" + Guid.NewGuid().ToString("N"));
+                using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose)) { }
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         private void GuardarConfiguracion()

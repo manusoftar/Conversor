@@ -45,10 +45,9 @@ namespace Conversor
             if (!String.IsNullOrWhiteSpace(directory) && !Directory.Exists(directory))
                 Directory.CreateDirectory(directory);
 
-            if (!System.IO.File.Exists(filename))
-                using (System.IO.File.Create(filename)) { }
-
-            using (System.IO.StreamWriter file = new System.IO.StreamWriter(filename))
+            // StreamWriter crea el archivo si no existe y lo cierra siempre (using),
+            // no hace falta (ni conviene) un File.Create previo que deja el handle abierto.
+            using (System.IO.StreamWriter file = new System.IO.StreamWriter(filename, false))
             {
                 foreach (String prop in list.Keys.ToArray())
                     if (!String.IsNullOrWhiteSpace(list[prop]))
@@ -66,10 +65,10 @@ namespace Conversor
             this.filename = filename;
             list = new Dictionary<String, String>();
 
+            // Si el archivo no existe no se crea acá: se crea en Save(). Así, abrir la
+            // configuración nunca falla por falta de permisos de escritura.
             if (System.IO.File.Exists(filename))
                 loadFromFile(filename);
-            else
-                using (System.IO.File.Create(filename)) { }
         }
 
         private void loadFromFile(String file)

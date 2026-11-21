@@ -3,7 +3,11 @@ name: Build and Release (Windows .NET Framework)
 on:
   push:
     tags:
-      - 'v*' # ej: v1.0.0
+      - 'v*' # ej: v1.0.0 -> compila y publica el release
+    branches:
+      - 'claude/**' # compila y verifica (sin publicar release)
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -44,25 +48,12 @@ jobs:
         shell: pwsh
         run: |
           $outputDir = Join-Path $env:PROJECT_DIR "bin\Release"
-          $requiredFiles = @(
-            $env:EXE_NAME,
-            "FFMpegCore.dll",
-            "TextProgressBar.dll"
-          )
-
-          foreach ($file in $requiredFiles) {
-            $path = Join-Path $outputDir $file
-            if (!(Test-Path $path)) {
-              Write-Error "No se encontró el archivo requerido: $path"
-              exit 1
-            }
-          }
-
           if (!(Test-Path $outputDir)) {
             Write-Error "No se encontró el directorio de salida: $outputDir"
             exit 1
           }
-          Write-Host "OK -> $outputDir"
+          Get-ChildItem $outputDir | Format-Table Name, Length
+          ./tools/verify-dependencies.ps1 -OutputDir $outputDir -ProjectFile "$env:PROJECT_DIR\Conversor.csproj" -ExeName $env:EXE_NAME
 
       - name: Prepare artifacts
         shell: pwsh
@@ -70,18 +61,36 @@ jobs:
           $outputDir = Join-Path $env:PROJECT_DIR "bin\Release"
           $artifactDir = Join-Path "artifacts" "Conversor"
 
+          # En tags el zip lleva el nombre del tag; en ramas/PR, "dev"
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "dev" }
+          $zipName = "Conversor-$version-win-x64.zip"
+
           New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
-          Copy-Item (Join-Path $outputDir "*") $artifactDir -Recurse -Force
+          # Solo lo necesario para ejecutar (sin .pdb)
+          Copy-Item (Join-Path $outputDir "*") $artifactDir -Recurse -Force -Exclude "*.pdb"
 
           Compress-Archive `
             -Path "$artifactDir\*" `
-            -DestinationPath "artifacts/Conversor-${{ github.ref_name }}-win-x64.zip" `
+            -DestinationPath "artifacts/$zipName" `
             -Force
 
+          # Comprobar el contenido real del zip: tiene que poder ejecutarse por sí solo
+          $check = Join-Path $env:RUNNER_TEMP "zipcheck"
+          if (Test-Path $check) { Remove-Item $check -Recurse -Force }
+          Expand-Archive "artifacts/$zipName" -DestinationPath $check
+          ./tools/verify-dependencies.ps1 -OutputDir $check -ProjectFile "$env:PROJECT_DIR\Conversor.csproj" -ExeName $env:EXE_NAME
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Conversor-win-x64
+          path: artifacts/*.zip
+
       - name: Create GitHub Release and upload assets
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/Conversor-${{ github.ref_name }}-win-x64.zip
+            artifacts/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
