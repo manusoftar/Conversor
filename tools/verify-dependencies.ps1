@@ -40,6 +40,7 @@ foreach ($group in @($proj.Project.ItemGroup)) {
     foreach ($ref in @($group.Reference)) {
         if ($null -ne $ref -and $null -ne $ref.HintPath) {
             $hint = [string]$ref.HintPath
+            if ($hint -notmatch 'packages') { continue }  # ignora referencias de plataforma (p. ej. netstandard de Mono)
             $required.Add([System.IO.Path]::GetFileName(($hint -replace '\\', '/')))
         }
     }
