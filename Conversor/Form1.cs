@@ -26,11 +26,22 @@ namespace Conversor
         String dataDirectory = ""; // carpeta donde viven config.cfg y el log (instalación, o LocalAppData si no es escribible)
         const int BITRATE = 8000; // Bitrate en kbps
         const string DefaultLogFileName = "Conversor.log";
+        const int MaxVideosEnParalelo = 2;
+
+        // Estado del proceso de conversión en curso
+        System.Threading.CancellationTokenSource cancelSource;
+        volatile bool abortando = false;
+        readonly object progresoLock = new object();
+        readonly Dictionary<int, int> progresoActivos = new Dictionary<int, int>(); // índice de video -> % actual
 
         public Form1()
         {
             InitializeComponent();
             AppLogger.RegisterSink(AppendLogToConsole);
+
+            // Si Conversor termina por cualquier motivo, Windows cierra también sus ffmpeg/ffprobe
+            ProcessJob.KillChildrenOnExit();
+            button4.Enabled = false; // ABORTAR solo se habilita mientras se procesa
 
             //Verifico si hay archivo de configuración
             String ruta = Application.ExecutablePath;
@@ -50,6 +61,10 @@ namespace Conversor
             String useGPU = config.get("useGPU", "false");
             checkBoxGPU.Checked = useGPU.ToLower() == "true";
 
+            // Cargar preferencia de procesamiento paralelo
+            String paralelo = config.get("parallelProcessing", "false");
+            checkBoxParalelo.Checked = paralelo.ToLower() == "true";
+
             RegistrarDiagnosticosDeInicio();
 
             // Detectar GPU y actualizar estado (antes de conectar el evento para no disparar guardado)
@@ -57,6 +72,7 @@ namespace Conversor
 
             // Agregar event handler para guardar cambios del checkbox
             checkBoxGPU.CheckedChanged += checkBoxGPU_CheckedChanged;
+            checkBoxParalelo.CheckedChanged += checkBoxParalelo_CheckedChanged;
         }
 
         private void textBox1_TextChanged(object sender, EventArgs e)
@@ -182,9 +198,17 @@ namespace Conversor
 
         private void AppendLogToConsole(string msg)
         {
+            if (txtLog.IsDisposed || txtLog.Disposing)
+                return;
+
             if (txtLog.InvokeRequired)
             {
-                txtLog.Invoke(new Action(() => AppendLogToConsole(msg)));
+                try
+                {
+                    txtLog.Invoke(new Action(() => AppendLogToConsole(msg)));
+                }
+                catch (ObjectDisposedException) { }
+                catch (InvalidOperationException) { } // el formulario se está cerrando
                 return;
             }
             txtLog.AppendText(msg + Environment.NewLine);
@@ -248,175 +272,486 @@ namespace Conversor
 
             GlobalFFOptions.Configure(new FFOptions { BinaryFolder = Path.GetDirectoryName(ffmpegPath) });
 
+            // Datos que usan los workers, capturados acá para no tocar controles desde otros hilos
+            List<string> rutas = listBox1.Items.Cast<string>().ToList();
+            string carpetaDestino = textBox1.Text;
+            bool usarGpu = checkBoxGPU.Checked && checkBoxGPU.Enabled;
+            string tipoGPU = usarGpu ? DetectarGPU() : null;
+            int simultaneos = checkBoxParalelo.Checked ? Math.Min(MaxVideosEnParalelo, rutas.Count) : 1;
+            List<string> salidas = CalcularRutasDeSalida(rutas, carpetaDestino);
+            ResumenProceso resumen = new ResumenProceso();
+
+            lock (progresoLock)
+                progresoActivos.Clear();
+            textProgressBar3.Value = 0;
             textProgressBar4.Value = 0;
+            textProgressBar4.Maximum = rutas.Count;
             isProcessing = true;
+            abortando = false;
             button3.Enabled = false;
+            button4.Enabled = true;
+            button4.Text = "ABORTAR";
             txtLog.Clear();
+
+            cancelSource = new System.Threading.CancellationTokenSource();
+            System.Threading.CancellationToken token = cancelSource.Token;
+            bool trabajoTerminado = false;
 
             AppLogger.Info("=== Inicio del proceso ===");
             AppLogger.Info("FFmpeg: " + ffmpegPath);
-            AppLogger.Info("Destino: " + textBox1.Text);
+            AppLogger.Info("Destino: " + carpetaDestino);
             AppLogger.Info("Resolución: " + ancho + "x" + alto);
-            AppLogger.Info("GPU habilitada: " + (checkBoxGPU.Checked && checkBoxGPU.Enabled ? "si" : "no"));
-            AppLogger.Info("Videos a procesar: " + listBox1.Items.Count);
+            AppLogger.Info("GPU habilitada: " + (tipoGPU != null ? "si (" + tipoGPU + ")" : "no"));
+            AppLogger.Info("Videos a procesar: " + rutas.Count);
+            AppLogger.Info("Videos en simultáneo: " + simultaneos);
 
+            if (usarGpu && tipoGPU == null)
+            {
+                AppLogger.Warn("No se detectó GPU compatible (NVIDIA, AMD o Intel), se usará CPU");
+                resumen.Avisar("No se detectó una GPU compatible (NVIDIA, AMD o Intel): se usó CPU.");
+            }
+
+            System.Collections.Concurrent.ConcurrentQueue<int> cola =
+                new System.Collections.Concurrent.ConcurrentQueue<int>(Enumerable.Range(0, rutas.Count));
+
+            Task reaper = null;
             try
             {
-                foreach (String ruta in listBox1.Items)
+                // Mientras se está abortando, vigila que no quede ningún ffmpeg/ffprobe de este proceso
+                // (cubre el caso de un worker que justo estaba arrancando uno nuevo cuando se pidió abortar)
+                reaper = Task.Run(async () =>
                 {
-                    textProgressBar3.Value = 0;
-                    String outputPath = textBox1.Text + "\\" + Path.GetFileNameWithoutExtension(ruta) + "_convertido.mp4";
-                    bool conversionExitosa = false;
-
-                    AppLogger.Info("--- Procesando: " + Path.GetFileName(ruta));
-                    AppLogger.Info("    Entrada: " + ruta);
-                    AppLogger.Info("    Salida:  " + outputPath);
-
-                    // Obtener duración del video para el progreso
-                    TimeSpan duration;
-                    try
+                    while (!trabajoTerminado)
                     {
-                        AppLogger.Info("    Analizando video con ffprobe...");
-                        var mediaInfo = await Task.Run(() => FFProbe.Analyse(ruta));
-                        duration = mediaInfo.Duration;
-                        
-                        if (duration.TotalSeconds <= 0)
-                        {
-                            AppLogger.Warn("    Duración inválida, se omitirá este archivo");
-                            MessageBox.Show($"No se pudo obtener la duración del video: {Path.GetFileName(ruta)}.\nSe omitirá este archivo.",
-                                           "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                            textProgressBar4.Value++;
-                            continue;
-                        }
-                        AppLogger.Info("    Duración: " + duration.ToString(@"hh\:mm\:ss"));
+                        if (token.IsCancellationRequested)
+                            MatarProcesosHijos();
+                        await Task.Delay(300);
                     }
-                    catch (Exception exProbe)
+                });
+
+                // Pool de workers: cada uno toma el siguiente video de la cola apenas termina el suyo,
+                // así siempre hay 'simultaneos' videos en curso mientras queden dos o más por procesar,
+                // y el último video se procesa solo.
+                List<Task> workers = new List<Task>();
+                for (int w = 0; w < simultaneos; w++)
+                {
+                    workers.Add(Task.Run(async () =>
                     {
-                        AppLogger.Exception("No se pudo analizar el video: " + Path.GetFileName(ruta), exProbe);
-                        MessageBox.Show($"Error al analizar el video: {Path.GetFileName(ruta)}\n{exProbe.Message}\nSe omitirá este archivo.",
-                                       "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        textProgressBar4.Value++;
-                        continue;
-                    }
-
-                    // Intentar con GPU si está habilitado y disponible
-                    if (checkBoxGPU.Checked && checkBoxGPU.Enabled)
-                    {
-                        String tipoGPU = DetectarGPU();
-                        if (tipoGPU != null)
+                        int indice;
+                        while (!token.IsCancellationRequested && cola.TryDequeue(out indice))
                         {
-                            try
-                            {
-                                string customCodecArgs = "";
-                                
-                                if (tipoGPU == "NVIDIA")
-                                    customCodecArgs = "-c:v h264_nvenc -preset slow -rc vbr_hq -b:v " + BITRATE + "k";
-                                else if (tipoGPU == "AMD")
-                                    customCodecArgs = "-c:v h264_amf -quality quality -b:v " + BITRATE + "k";
-                                else if (tipoGPU == "INTEL")
-                                    customCodecArgs = "-c:v h264_qsv -preset slow -b:v " + BITRATE + "k";
-
-                                AppLogger.Info("    GPU (" + tipoGPU + ") codec: " + customCodecArgs);
-                                AppLogger.Info("    Iniciando conversión con GPU...");
-
-                                string capturedCodecArgs = customCodecArgs;
-                                await Task.Run(() =>
-                                {
-                                    FFMpegArguments
-                                        .FromFileInput(ruta)
-                                        .OutputToFile(outputPath, true, options => options
-                                            .WithCustomArgument("-vf scale=" + ancho + ":" + alto)
-                                            .WithCustomArgument(capturedCodecArgs)
-                                            .WithAudioCodec(AudioCodec.Aac)
-                                            .WithCustomArgument("-threads 0")
-                                        )
-                                        .NotifyOnProgress(percentage => {
-                                            if (textProgressBar3.InvokeRequired)
-                                            {
-                                                textProgressBar3.Invoke(new Action(() =>
-                                                {
-                                                    textProgressBar3.Value = Math.Min(100, Convert.ToInt32(percentage));
-                                                }));
-                                            }
-                                        }, duration)
-                                        .ProcessSynchronously();
-                                });
-                                conversionExitosa = true;
-                                AppLogger.Info("    [OK] Conversión con GPU completada");
-                            }
-                            catch (Exception exGPU)
-                            {
-                                AppLogger.Exception("Falló la conversión con GPU.", exGPU);
-                                AppLogger.Info("    Intentando con CPU como alternativa...");
-                                MessageBox.Show("La conversión con GPU falló. Se intentará con CPU.",
-                                               "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                            }
+                            ResultadoVideo resultado = await ProcesarVideoAsync(
+                                indice, rutas.Count, rutas[indice], salidas[indice], ancho, alto, tipoGPU, resumen, token);
+                            resumen.Registrar(resultado);
                         }
-                        else
-                        {
-                            AppLogger.Warn("    No se detectó GPU compatible, usando CPU");
-                            MessageBox.Show("No se detectó una GPU compatible (NVIDIA, AMD o Intel). Se usará CPU.",
-                                           "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        }
-                    }
-
-                    // Fallback a CPU si GPU falló o no está habilitado
-                    if (!conversionExitosa)
-                    {
-                        try
-                        {
-                            AppLogger.Info("    CPU codec: libx264, bitrate=" + BITRATE + "k, escala=" + ancho + "x" + alto + ", preset=medium");
-                            AppLogger.Info("    Iniciando conversión con CPU...");
-
-                            await Task.Run(() =>
-                            {
-                                FFMpegArguments
-                                    .FromFileInput(ruta)
-                                    .OutputToFile(outputPath, true, options => options
-                                        .WithVideoCodec(VideoCodec.LibX264)
-                                        .WithVideoBitrate(BITRATE)
-                                        .WithCustomArgument("-vf scale=" + ancho + ":" + alto)
-                                        .WithCustomArgument("-preset medium")
-                                        .WithAudioCodec(AudioCodec.Aac)
-                                        .WithCustomArgument("-threads 0")
-                                    )
-                                    .NotifyOnProgress(percentage => {
-                                        if (textProgressBar3.InvokeRequired)
-                                        {
-                                            textProgressBar3.Invoke(new Action(() =>
-                                            {
-                                                textProgressBar3.Value = Math.Min(100, Convert.ToInt32(percentage));
-                                            }));
-                                        }
-                                    }, duration)
-                                    .ProcessSynchronously();
-                            });
-                            AppLogger.Info("    [OK] Conversión con CPU completada");
-                        }
-                        catch (Exception ex)
-                        {
-                            AppLogger.Exception("Conversión fallida para el video: " + Path.GetFileName(ruta), ex);
-                            MessageBox.Show("Error al convertir el video: " + ex.Message,
-                                           "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        }
-                    }
-                                      
-                    textProgressBar4.Value++;
+                    }));
                 }
 
-                AppLogger.Info("=== Proceso finalizado ===");
+                await Task.WhenAll(workers);
+
+                if (token.IsCancellationRequested)
+                    AppLogger.Warn("=== Proceso ABORTADO === completados: " + resumen.Ok + ", cancelados: " + resumen.Cancelados + ", sin iniciar: " + cola.Count);
+                else
+                    AppLogger.Info("=== Proceso finalizado === correctos: " + resumen.Ok + ", omitidos: " + resumen.Omitidos + ", con error: " + resumen.Fallidos);
             }
             catch (Exception exGlobal)
             {
                 AppLogger.Exception("Error inesperado durante el proceso.", exGlobal);
-                MessageBox.Show("Error inesperado durante el proceso: " + exGlobal.Message,
-                               "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                resumen.Avisar("Error inesperado durante el proceso: " + exGlobal.Message);
             }
             finally
             {
+                trabajoTerminado = true;
+                if (reaper != null)
+                {
+                    try { await reaper; } catch (Exception) { }
+                }
+
+                // Red de seguridad: no debe quedar ningún ffmpeg/ffprobe de este proceso
+                int sobrantes = MatarProcesosHijos();
+                if (sobrantes > 0)
+                    AppLogger.Warn("Se cerraron " + sobrantes + " proceso(s) de ffmpeg/ffprobe que habían quedado abiertos.");
+
+                try { cancelSource.Dispose(); } catch (Exception) { }
+                cancelSource = null;
+                lock (progresoLock)
+                    progresoActivos.Clear();
+
                 isProcessing = false;
-                button3.Enabled = true;
+                abortando = false;
+                if (!IsDisposed)
+                {
+                    textProgressBar3.Value = 0;
+                    button3.Enabled = true;
+                    button4.Enabled = false;
+                    button4.Text = "ABORTAR";
+                }
             }
+
+            if (!IsDisposed && !token.IsCancellationRequested)
+            {
+                List<string> avisos = resumen.ObtenerAvisos();
+                if (avisos.Count > 0)
+                {
+                    string detalle = string.Join(Environment.NewLine, avisos.Take(15).Select(a => "• " + a));
+                    if (avisos.Count > 15)
+                        detalle += Environment.NewLine + "… y " + (avisos.Count - 15) + " más (ver el log).";
+                    MessageBox.Show("El proceso terminó con avisos:" + Environment.NewLine + Environment.NewLine + detalle,
+                                    "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+        }
+
+        private enum ResultadoVideo { Ok, Omitido, Fallido, Cancelado }
+
+        /// <summary>Acumula resultados y avisos desde varios hilos.</summary>
+        private sealed class ResumenProceso
+        {
+            private readonly object sync = new object();
+            private readonly List<string> avisos = new List<string>();
+            public int Ok, Omitidos, Fallidos, Cancelados;
+
+            public void Registrar(ResultadoVideo r)
+            {
+                lock (sync)
+                {
+                    switch (r)
+                    {
+                        case ResultadoVideo.Ok: Ok++; break;
+                        case ResultadoVideo.Omitido: Omitidos++; break;
+                        case ResultadoVideo.Fallido: Fallidos++; break;
+                        default: Cancelados++; break;
+                    }
+                }
+            }
+
+            public void Avisar(string mensaje)
+            {
+                lock (sync)
+                    avisos.Add(mensaje);
+            }
+
+            public List<string> ObtenerAvisos()
+            {
+                lock (sync)
+                    return new List<string>(avisos);
+            }
+        }
+
+        /// <summary>
+        /// Nombre de salida de cada video (&lt;nombre&gt;_convertido.mp4). Si dos orígenes darían el mismo nombre
+        /// (mismo archivo en carpetas distintas) se agrega un sufijo para que no se pisen entre sí,
+        /// algo que con dos videos en paralelo corrompería el resultado.
+        /// </summary>
+        private static List<string> CalcularRutasDeSalida(List<string> rutas, string carpetaDestino)
+        {
+            HashSet<string> usados = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> salidas = new List<string>();
+
+            foreach (string ruta in rutas)
+            {
+                string baseName = Path.GetFileNameWithoutExtension(ruta) + "_convertido";
+                string candidato = Path.Combine(carpetaDestino, baseName + ".mp4");
+                int n = 2;
+                while (!usados.Add(candidato))
+                {
+                    candidato = Path.Combine(carpetaDestino, baseName + "_" + n + ".mp4");
+                    n++;
+                }
+                salidas.Add(candidato);
+            }
+            return salidas;
+        }
+
+        private async Task<ResultadoVideo> ProcesarVideoAsync(int indice, int total, string ruta, string outputPath,
+            int ancho, int alto, string tipoGPU, ResumenProceso resumen, System.Threading.CancellationToken token)
+        {
+            string nombre = Path.GetFileName(ruta);
+            string tag = "[" + (indice + 1) + "/" + total + "] ";
+            ResultadoVideo resultado = ResultadoVideo.Fallido;
+
+            try
+            {
+                token.ThrowIfCancellationRequested();
+
+                AppLogger.Info(tag + "--- Procesando: " + nombre);
+                AppLogger.Info(tag + "    Entrada: " + ruta);
+                AppLogger.Info(tag + "    Salida:  " + outputPath);
+                ReportarProgresoVideo(indice, 0);
+
+                // Obtener duración del video para el progreso
+                TimeSpan duration;
+                try
+                {
+                    AppLogger.Info(tag + "    Analizando video con ffprobe...");
+                    var mediaInfo = await Task.Run(() => FFProbe.Analyse(ruta));
+                    duration = mediaInfo.Duration;
+                }
+                catch (Exception exProbe) when (!token.IsCancellationRequested)
+                {
+                    AppLogger.Exception(tag + "No se pudo analizar el video: " + nombre, exProbe);
+                    resumen.Avisar("No se pudo analizar '" + nombre + "': " + exProbe.Message + " (se omitió)");
+                    resultado = ResultadoVideo.Omitido;
+                    return resultado;
+                }
+
+                if (duration.TotalSeconds <= 0)
+                {
+                    AppLogger.Warn(tag + "    Duración inválida, se omitirá este archivo");
+                    resumen.Avisar("No se pudo obtener la duración de '" + nombre + "' (se omitió)");
+                    resultado = ResultadoVideo.Omitido;
+                    return resultado;
+                }
+                AppLogger.Info(tag + "    Duración: " + duration.ToString(@"hh\:mm\:ss"));
+
+                bool conversionExitosa = false;
+
+                // Intentar con GPU si está habilitado y disponible
+                if (tipoGPU != null)
+                {
+                    string codecGpu = "";
+                    if (tipoGPU == "NVIDIA")
+                        codecGpu = "-c:v h264_nvenc -preset slow -rc vbr_hq -b:v " + BITRATE + "k";
+                    else if (tipoGPU == "AMD")
+                        codecGpu = "-c:v h264_amf -quality quality -b:v " + BITRATE + "k";
+                    else if (tipoGPU == "INTEL")
+                        codecGpu = "-c:v h264_qsv -preset slow -b:v " + BITRATE + "k";
+
+                    try
+                    {
+                        AppLogger.Info(tag + "    GPU (" + tipoGPU + ") codec: " + codecGpu);
+                        AppLogger.Info(tag + "    Iniciando conversión con GPU...");
+                        await EjecutarFfmpegAsync(ruta, outputPath, ancho, alto, duration, codecGpu, indice, token);
+                        conversionExitosa = true;
+                        AppLogger.Info(tag + "    [OK] Conversión con GPU completada");
+                    }
+                    catch (Exception exGPU) when (!token.IsCancellationRequested)
+                    {
+                        AppLogger.Exception(tag + "Falló la conversión con GPU.", exGPU);
+                        AppLogger.Info(tag + "    Intentando con CPU como alternativa...");
+                        resumen.Avisar("La conversión con GPU falló en '" + nombre + "'; se reintentó con CPU.");
+                        ReportarProgresoVideo(indice, 0);
+                    }
+                }
+
+                // Fallback a CPU si GPU falló o no está habilitado
+                if (!conversionExitosa)
+                {
+                    AppLogger.Info(tag + "    CPU codec: libx264, bitrate=" + BITRATE + "k, escala=" + ancho + "x" + alto + ", preset=medium");
+                    AppLogger.Info(tag + "    Iniciando conversión con CPU...");
+                    await EjecutarFfmpegAsync(ruta, outputPath, ancho, alto, duration, null, indice, token);
+                    AppLogger.Info(tag + "    [OK] Conversión con CPU completada");
+                }
+
+                resultado = ResultadoVideo.Ok;
+            }
+            catch (OperationCanceledException)
+            {
+                resultado = ResultadoVideo.Cancelado;
+            }
+            catch (Exception ex) when (token.IsCancellationRequested)
+            {
+                // ffmpeg fue cerrado a propósito por el aborto: el error que sale de ahí es esperado
+                AppLogger.Info(tag + "    (interrumpido: " + ex.GetType().Name + ")");
+                resultado = ResultadoVideo.Cancelado;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Exception(tag + "Conversión fallida para el video: " + nombre, ex);
+                resumen.Avisar("Error al convertir '" + nombre + "': " + ex.Message);
+                resultado = ResultadoVideo.Fallido;
+            }
+            finally
+            {
+                if (resultado == ResultadoVideo.Cancelado)
+                {
+                    AppLogger.Warn(tag + "Cancelado: " + nombre);
+                    EliminarSalidaIncompleta(outputPath, tag);
+                }
+                else if (resultado == ResultadoVideo.Fallido)
+                {
+                    EliminarSalidaIncompleta(outputPath, tag);
+                }
+
+                QuitarProgresoVideo(indice, resultado != ResultadoVideo.Cancelado);
+            }
+
+            return resultado;
+        }
+
+        /// <summary>Ejecuta ffmpeg para un video. codecGpu == null significa CPU (libx264).</summary>
+        private Task EjecutarFfmpegAsync(string ruta, string outputPath, int ancho, int alto, TimeSpan duration,
+            string codecGpu, int indice, System.Threading.CancellationToken token)
+        {
+            return Task.Run(() =>
+            {
+                token.ThrowIfCancellationRequested();
+
+                bool ok = FFMpegArguments
+                    .FromFileInput(ruta)
+                    .OutputToFile(outputPath, true, options =>
+                    {
+                        if (codecGpu != null)
+                        {
+                            options
+                                .WithCustomArgument("-vf scale=" + ancho + ":" + alto)
+                                .WithCustomArgument(codecGpu)
+                                .WithAudioCodec(AudioCodec.Aac)
+                                .WithCustomArgument("-threads 0");
+                        }
+                        else
+                        {
+                            options
+                                .WithVideoCodec(VideoCodec.LibX264)
+                                .WithVideoBitrate(BITRATE)
+                                .WithCustomArgument("-vf scale=" + ancho + ":" + alto)
+                                .WithCustomArgument("-preset medium")
+                                .WithAudioCodec(AudioCodec.Aac)
+                                .WithCustomArgument("-threads 0");
+                        }
+                    })
+                    .NotifyOnProgress(percentage =>
+                    {
+                        ReportarProgresoVideo(indice, (int)Math.Max(0, Math.Min(100, Math.Round(percentage))));
+                    }, duration)
+                    .CancellableThrough(token)
+                    .ProcessSynchronously();
+
+                token.ThrowIfCancellationRequested();
+                if (!ok)
+                    throw new InvalidOperationException("ffmpeg terminó con error.");
+            });
+        }
+
+        private void EliminarSalidaIncompleta(string outputPath, string tag)
+        {
+            try
+            {
+                if (File.Exists(outputPath))
+                {
+                    File.Delete(outputPath);
+                    AppLogger.Info(tag + "    Se eliminó el archivo de salida incompleto.");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn(tag + "    No se pudo eliminar el archivo incompleto '" + outputPath + "': " + ex.Message);
+            }
+        }
+
+        // ---- Progreso (se puede llamar desde cualquier hilo) ----
+
+        private void EnUI(Action accion)
+        {
+            if (IsDisposed || Disposing)
+                return;
+            try
+            {
+                if (InvokeRequired)
+                    BeginInvoke(accion);
+                else
+                    accion();
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { } // el formulario se está cerrando
+        }
+
+        private void ReportarProgresoVideo(int indice, int porcentaje)
+        {
+            lock (progresoLock)
+                progresoActivos[indice] = porcentaje;
+            EnUI(ActualizarBarraVideoActual);
+        }
+
+        private void QuitarProgresoVideo(int indice, bool contarComoTerminado)
+        {
+            lock (progresoLock)
+                progresoActivos.Remove(indice);
+
+            EnUI(() =>
+            {
+                if (contarComoTerminado)
+                    textProgressBar4.Value = Math.Min(textProgressBar4.Maximum, textProgressBar4.Value + 1);
+                ActualizarBarraVideoActual();
+            });
+        }
+
+        // Con un solo video activo muestra su avance; con dos en paralelo, el promedio de ambos
+        private void ActualizarBarraVideoActual()
+        {
+            int[] valores;
+            lock (progresoLock)
+                valores = progresoActivos.Values.ToArray();
+
+            textProgressBar3.Value = valores.Length == 0 ? 0 : Math.Max(0, Math.Min(100, (int)valores.Average()));
+        }
+
+        // ---- Abortar ----
+
+        /// <summary>Cancela el proceso en curso y cierra los ffmpeg/ffprobe lanzados por esta aplicación.</summary>
+        private void SolicitarAborto()
+        {
+            if (!isProcessing || abortando)
+                return;
+
+            abortando = true;
+            button4.Enabled = false;
+            button4.Text = "ABORTANDO...";
+            AppLogger.Warn("ABORTANDO: se cancela el proceso y se cierran los ffmpeg en curso...");
+
+            try { cancelSource?.Cancel(); }
+            catch (ObjectDisposedException) { }
+
+            int cerrados = MatarProcesosHijos();
+            if (cerrados > 0)
+                AppLogger.Info("Procesos de ffmpeg/ffprobe cerrados: " + cerrados);
+        }
+
+        /// <summary>
+        /// Cierra los ffmpeg.exe/ffprobe.exe cuyo proceso padre es esta aplicación (nunca toca los que
+        /// el usuario tenga abiertos por su cuenta). Devuelve cuántos cerró.
+        /// </summary>
+        private int MatarProcesosHijos()
+        {
+            int cerrados = 0;
+            try
+            {
+                int miPid;
+                using (System.Diagnostics.Process yo = System.Diagnostics.Process.GetCurrentProcess())
+                    miPid = yo.Id;
+
+                using (var searcher = new ManagementObjectSearcher(
+                    "SELECT ProcessId, Name FROM Win32_Process WHERE ParentProcessId = " + miPid))
+                using (ManagementObjectCollection hijos = searcher.Get())
+                {
+                    foreach (ManagementObject hijo in hijos)
+                    {
+                        using (hijo)
+                        {
+                            string nombre = (hijo["Name"] ?? "").ToString();
+                            if (!nombre.StartsWith("ffmpeg", StringComparison.OrdinalIgnoreCase) &&
+                                !nombre.StartsWith("ffprobe", StringComparison.OrdinalIgnoreCase))
+                                continue;
+
+                            try
+                            {
+                                using (System.Diagnostics.Process p = System.Diagnostics.Process.GetProcessById(Convert.ToInt32(hijo["ProcessId"])))
+                                {
+                                    p.Kill();
+                                    p.WaitForExit(3000);
+                                    cerrados++;
+                                }
+                            }
+                            catch (Exception) { } // ya había terminado
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Warn("No se pudieron revisar los procesos hijos: " + ex.Message);
+            }
+            return cerrados;
         }
 
         private void rutaFfmpeg_click(object sender, EventArgs e)
@@ -446,18 +781,28 @@ namespace Conversor
 
         private void abortarProceso(object sender, FormClosingEventArgs e)
         {
-            // En la nueva API, los procesos se manejan de forma diferente
-            // No hay un objeto encoder persistente para detener
+            if (!isProcessing)
+                return;
+
+            // Si Windows se está apagando o cerrando la sesión no se puede preguntar
+            if (e.CloseReason == CloseReason.UserClosing)
+            {
+                DialogResult r = MessageBox.Show(
+                    "Hay videos procesándose. Si cerrás la aplicación se aborta el proceso y los videos en curso quedarán incompletos.\n\n¿Querés cerrar igual?",
+                    "Proceso en curso", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (r != DialogResult.Yes)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+            }
+
+            SolicitarAborto();
         }
 
         private void button4_Click(object sender, EventArgs e)
         {
-            if(isProcessing)
-            {
-                MessageBox.Show("Para cancelar el proceso, cierra la aplicación",
-                               "Información", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                textProgressBar3.Value = 0;
-            }
+            SolicitarAborto();
         }
 
         private void checkBoxGPU_CheckedChanged(object sender, EventArgs e)
@@ -466,11 +811,18 @@ namespace Conversor
             GuardarConfiguracion();
         }
 
+        private void checkBoxParalelo_CheckedChanged(object sender, EventArgs e)
+        {
+            config.set("parallelProcessing", checkBoxParalelo.Checked.ToString().ToLower());
+            GuardarConfiguracion();
+        }
+
         private void InicializarConfiguracion(bool configExists)
         {
             bool changed = false;
             changed |= AsegurarValorConfiguracion("ffmpegPath", "");
             changed |= AsegurarValorConfiguracion("useGPU", "false");
+            changed |= AsegurarValorConfiguracion("parallelProcessing", "false");
             changed |= AsegurarValorConfiguracion("enableFileLogging", "false");
             changed |= AsegurarValorConfiguracion("logFilePath", Path.Combine(dataDirectory, DefaultLogFileName));
 

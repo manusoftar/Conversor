@@ -52,6 +52,7 @@ namespace Conversor
             this.textProgressBar4 = new TextProgressBar.TextProgressBar();
             this.button4 = new System.Windows.Forms.Button();
             this.checkBoxGPU = new System.Windows.Forms.CheckBox();
+            this.checkBoxParalelo = new System.Windows.Forms.CheckBox();
             this.lblGpuStatus = new System.Windows.Forms.Label();
             this.lblLogTitle = new System.Windows.Forms.Label();
             this.txtLog = new System.Windows.Forms.TextBox();
@@ -188,9 +189,9 @@ namespace Conversor
             // button3
             // 
             this.button3.Font = new System.Drawing.Font("MS Reference Sans Serif", 21.75F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.button3.Location = new System.Drawing.Point(244, 259);
+            this.button3.Location = new System.Drawing.Point(244, 285);
             this.button3.Name = "button3";
-            this.button3.Size = new System.Drawing.Size(544, 102);
+            this.button3.Size = new System.Drawing.Size(544, 76);
             this.button3.TabIndex = 8;
             this.button3.Text = "PROCESAR";
             this.button3.UseVisualStyleBackColor = true;
@@ -250,6 +251,17 @@ namespace Conversor
             this.checkBoxGPU.Text = "Usar aceleración por GPU (si está disponible)";
             this.checkBoxGPU.UseVisualStyleBackColor = true;
             // 
+            // checkBoxParalelo
+            // 
+            this.checkBoxParalelo.AutoSize = true;
+            this.checkBoxParalelo.Location = new System.Drawing.Point(268, 261);
+            this.checkBoxParalelo.Name = "checkBoxParalelo";
+            this.checkBoxParalelo.Size = new System.Drawing.Size(300, 17);
+            this.checkBoxParalelo.TabIndex = 20;
+            this.checkBoxParalelo.Text = "Procesar de a 2 videos en paralelo (recomendado con GPU)";
+            this.toolTip1.SetToolTip(this.checkBoxParalelo, "Procesa dos videos a la vez, y cuando queda uno solo lo procesa solo.\r\nCon aceleración por GPU suele reducir el tiempo total; con CPU casi no aporta, \r\nporque ffmpeg ya usa todos los núcleos.");
+            this.checkBoxParalelo.UseVisualStyleBackColor = true;
+            // 
             // lblGpuStatus
             // 
             this.lblGpuStatus.AutoSize = false;
@@ -287,6 +299,7 @@ namespace Conversor
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(800, 700);
+            this.Controls.Add(this.checkBoxParalelo);
             this.Controls.Add(this.checkBoxGPU);
             this.Controls.Add(this.lblGpuStatus);
             this.Controls.Add(this.lblLogTitle);
@@ -328,6 +341,7 @@ namespace Conversor
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.TextBox textBox1;
         private System.Windows.Forms.ToolTip toolTip1;
+        private System.Windows.Forms.CheckBox checkBoxParalelo;
         private System.Windows.Forms.OpenFileDialog openFileDialog1;
         private System.Windows.Forms.Button button1;
         private System.Windows.Forms.Button button2;
